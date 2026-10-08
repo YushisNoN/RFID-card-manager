@@ -36,11 +36,24 @@
                            |
                      локальный кэш
 ```
+
+Питание:
+
+```
+[USB / блок питания 5V/12V] -> [ESP32] -> 3.3V -> [PN532]
+                                                  [TFT-дисплей]
+                                                  [LED + зуммер]
+```
+
+> [!NOTE]
+> Устройство питается от стандартного источника постоянного тока 5V/12V через USB или внешний блок. Периферия работает от 3.3V с платы ESP32.
+
 ![Макет устройства](docs/images/opiwebjakarta.png)
 
 ![Схема](docs/scheme/scheme.png)
 
 [![Open in Wokwi](https://img.shields.io/badge/Wokwi-Open_simulation-00B8A9?style=for-the-badge)](https://wokwi.com/projects/477347887993527297)
+
 ## Безопасность
 
 - TLS / HTTPS между станцией и сервером
