@@ -39,6 +39,8 @@
 ![Макет устройства](docs/images/opiwebjakarta.png)
 
 ![Схема](docs/scheme/scheme.png)
+
+[![Open in Wokwi](https://img.shields.io/badge/Wokwi-Open_simulation-00B8A9?style=for-the-badge)](https://wokwi.com/projects/477347887993527297)
 ## Безопасность
 
 - TLS / HTTPS между станцией и сервером
