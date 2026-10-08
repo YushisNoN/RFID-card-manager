@@ -38,6 +38,7 @@
 ```
 ![Макет устройства](docs/images/opiwebjakarta.png)
 
+![Схема](docs/scheme/scheme.png)
 ## Безопасность
 
 - TLS / HTTPS между станцией и сервером
