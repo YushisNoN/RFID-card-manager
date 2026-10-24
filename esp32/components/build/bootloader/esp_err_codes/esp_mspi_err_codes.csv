@@ -1,0 +1,3 @@
+name,value,file,comment
+ESP_ERR_FLASH_OP_FAIL,24577,components/esp_mspi/include/spi_flash_err.h,aligned with rom
+ESP_ERR_FLASH_OP_TIMEOUT,24578,components/esp_mspi/include/spi_flash_err.h,aligned with rom

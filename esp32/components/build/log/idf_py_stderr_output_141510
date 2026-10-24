@@ -1,0 +1,12 @@
+Command: ninja all
+CMake Error at /home/vladimir/esp/esp-idf/tools/cmake/build.cmake:392 (message):
+  Failed to resolve component 'web-client' required by component 'main':
+  unknown name.
+Call Stack (most recent call first):
+  /home/vladimir/esp/esp-idf/tools/cmake/build.cmake:441 (__build_resolve_and_add_req)
+  /home/vladimir/esp/esp-idf/tools/cmake/build.cmake:779 (__build_expand_requirements)
+  /home/vladimir/esp/esp-idf/tools/cmake/project.cmake:904 (idf_build_process)
+  CMakeLists.txt:6 (project)
+
+
+ninja: error: rebuilding 'build.ninja': subcommand failed
