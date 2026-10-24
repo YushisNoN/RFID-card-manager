@@ -1,2 +1,0 @@
-source /home/vladimir/RFID-card-manager/esp32/build/bootloader/gdbinit/symbols
-source /home/vladimir/RFID-card-manager/esp32/build/bootloader/gdbinit/connect
