@@ -1,130 +1,213 @@
 #include <stdio.h>
-#include "esp_timer.h" 
 #include "web-client.h"
+#include "wifi-manager.h"
 #include "esp_http_client.h"
-#include "esp_wifi.h"
-#include "esp_netif.h"
-#include "nvs_flash.h"
-#include <assert.h>
-
+#include "esp_log.h"
+#include <sys/param.h>
+#include "esp_tls_errors.h"
+#include "esp_crt_bundle.h"
 //https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/protocols/esp_http_client.html ESP offical
 
 
-#define HOST "aboba"
-#define PORT 80
+#define HOST "httpbin.org"
+#define PORT 443
+#define MAX_HTTP_RECV_BUFFER 512
+#define MAX_HTTP_OUTPUT_BUFFER 2048
+#define USERNAME "Im not so stupid to put my username and password in the code"
+#define PASSWORD "your_password"
+
+static const char *TAG = "HTTP_CLIENT";
 
 
-#define WIFI_SSID "START_1379"
-#define WIFI_PASSWORD "89215902115"
-#define MAX_WIFI_RECONNECT 5
-#define TIMER_WAIT 5 * 1000000
-
-static int s_retry_num = 0;
-
-static esp_timer_handle_t reconnect_timer = NULL;
-
-// Колбек для таймера 
-static void reconnect_timer_callback(void* arg)
-{
-    esp_wifi_connect();
+void web_client_init(){
+    wifi_init_sta();
 }
 
-//Обрабочтки событий для эвентов связанных с Wifi
-static void event_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data)
+
+//Обработчик эвентов http
+esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
 
-        ESP_ERROR_CHECK(esp_wifi_connect());
+    static int output_len;
 
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+    switch(evt->event_id) {
 
-        if (s_retry_num < MAX_WIFI_RECONNECT) {
+        case HTTP_EVENT_ERROR:
 
-            ESP_ERROR_CHECK(esp_wifi_connect());
-            s_retry_num++;
-            
-        } else {
+            ESP_LOGD(TAG, "HTTP_EVENT_ERROR");
+            break;
 
-           esp_timer_start_once(reconnect_timer, TIMER_WAIT);
-           s_retry_num = 0;
+        case HTTP_EVENT_ON_CONNECTED:
+
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_CONNECTED");
+            break;
+
+        case HTTP_EVENT_HEADER_SENT:
+
+            ESP_LOGD(TAG, "HTTP_EVENT_HEADER_SENT");
+            break;
+
+        case HTTP_EVENT_ON_HEADER:
+
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+            break;
+
+        case HTTP_EVENT_ON_HEADERS_COMPLETE:
+
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADERS_COMPLETE");
+            break;
+
+        case HTTP_EVENT_ON_DATA:
+
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+
+            //Если начали читать новый ответ то чистим буффер
+            if (output_len == 0 && evt->user_data) {
+
+                memset(evt->user_data, 0, MAX_HTTP_OUTPUT_BUFFER);
+
+            }
+
+            int copy_len = 0;
+
+            //user_data наш буффер который мы указали при конфигурации и используем для накопления ответа
+            copy_len = MIN(evt->data_len, (MAX_HTTP_OUTPUT_BUFFER - output_len - 1));
+
+            if (copy_len) {
+                memcpy(evt->user_data + output_len, evt->data, copy_len);
+            }
+
+            output_len += copy_len;
+
+            break;
+
+        case HTTP_EVENT_ON_FINISH:
+
+            //Закончили читать и поэтому все чистим
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_FINISH");
+
+            if (evt->user_data && output_len > 0) {
+                ((char *)evt->user_data)[output_len] = '\0';
+            }
+
+            output_len = 0;
+            break;
+
+        case HTTP_EVENT_DISCONNECTED:
+
+            ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED");
+
+            int mbedtls_err = 0;
+
+            esp_err_t err = esp_http_client_get_and_clear_last_tls_error(evt->client, &mbedtls_err, NULL);
+
+            if (err != 0) {
+                ESP_LOGI(TAG, "Last esp error code: 0x%x", err);
+                ESP_LOGI(TAG, "Last mbedtls failure: 0x%x", mbedtls_err);
+            }
+
+            output_len = 0;
+            break;
+
+        default:
+            break;
+
+    }
+
+    return ESP_OK;
+}
+
+
+
+uint8_t check_stud_uid(uint64_t uid){
+
+    char local_response_buffer[MAX_HTTP_OUTPUT_BUFFER] = {0};
+
+
+    char query_string[64];
+    snprintf(query_string, sizeof(query_string), "uid=%" PRIu64, uid);
+
+    esp_http_client_config_t config = {
+        .host = HOST,
+        .path = "/get",
+        .query = query_string,
+        .username = USERNAME,
+        .password = PASSWORD,  
+        .auth_type = HTTP_AUTH_TYPE_BASIC,
+        .event_handler = _http_event_handler,
+        .user_data = local_response_buffer, 
+        .transport_type = HTTP_TRANSPORT_OVER_SSL, 
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    uint8_t result = 0;
+
+    // GET
+    esp_err_t err = esp_http_client_perform(client);
+
+    if (err == ESP_OK) {
+        if (esp_http_client_get_status_code(client) == 200 && strlen(local_response_buffer) > 0) {
+
+            ESP_LOGI(TAG, "Response: %s", local_response_buffer);
+
+            if (strstr(local_response_buffer, "true") != NULL) {
+                result = 1;
+            } else {
+                result = 0;
+            }
+        }
+
+    } else {
+
+        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+
+    }
+
+    return result;
+
+}
+
+// Наличие отсутсвие плат - битовая маска состояния
+void send_state_log(uint32_t state) {
+
+    char local_response_buffer[MAX_HTTP_OUTPUT_BUFFER] = {0};
+
+
+    char query_string[64];
+    snprintf(query_string, sizeof(query_string), "state=%" PRIu32, state);
+
+    esp_http_client_config_t config = {
+        .host = HOST,
+        .path = "/state",
+        .query = query_string,
+        .username = USERNAME,
+        .password = PASSWORD,  
+        .auth_type = HTTP_AUTH_TYPE_BASIC,
+        .event_handler = _http_event_handler,
+        .user_data = local_response_buffer, 
+        .transport_type = HTTP_TRANSPORT_OVER_SSL, 
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    // GET
+    esp_err_t err = esp_http_client_perform(client);
+
+    if (err == ESP_OK) {
+        if (esp_http_client_get_status_code(client) == 200 && strlen(local_response_buffer) > 0) {
+
+            ESP_LOGI(TAG, "Response: %s", local_response_buffer);
 
         }
 
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+    } else {
 
-        s_retry_num = 0;
+        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
 
     }
-}
-
-
-// Подробно описано вот тут https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s3/api-guides/wifi-driver/station-scenarios.html#wifi-station-general-scenario
-void wifi_init_sta(void)
-{
-
-    //Это таймер для обработки переподключений
-    const esp_timer_create_args_t timer_args = {
-    .callback = &reconnect_timer_callback,
-    .name = "wifi_reconnect_timer"
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &reconnect_timer));
-
-    //Эта фигня трубет использования особой памяти
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-
-    //Создает TCP/IP стек и эвент луп для Wifi клиента
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
-    assert(sta_netif);
-
-
-
-
-    //Инициализация лоу драйвера Wi-Fi 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-
-    //Выбирает режим клиента
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-
-
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASSWORD,
-        },
-    };
-    //Выбираем режим и опять задаем конфиг
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-
-
-    //Задаем события и обработчик перед началом работы
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
-
-
-
-    //Стартуем
-    ESP_ERROR_CHECK(esp_wifi_start());
-
+    
 
 }
