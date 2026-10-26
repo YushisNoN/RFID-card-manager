@@ -1,5 +1,7 @@
 #  Гайд по ESP-IDF
 
+Официальная документация https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/build-system.html
+
 ## Установка (Linux)
 
     - Для компиляции с использованием ESP-IDF необходимо установить следующие пакеты. Команда зависит от дистрибутива Linux (Ubuntu и Debian):
@@ -33,7 +35,7 @@ idf.py set-target esp32s3
 
 ## Использование 
 
-    - В терминале где вы собираете работать с idf.py выполните :
+    - В терминале где вы собираете работать с idf.py выполните (ЭТО НЕОБХОДИМО ДЕЛАТЬ КАЖДРЫЙ РАЗ В НОВОМ ТЕРМИНАЛ):
 
 `
 . $HOME/esp/esp-idf/export.sh
@@ -44,7 +46,7 @@ idf.py set-target esp32s3
         - Из официального рееста:
 
     `
-        idg.py add-dependecny --component=my-component "component-name"
+        idg.py add-dependency --component=my-component "component-name"
     `
 
         - Из страндартных библиотек
