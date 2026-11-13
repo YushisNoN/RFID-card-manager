@@ -435,6 +435,3 @@ postgresql://USER:PASSWORD@HOST:5432/DATABASE_NAME
 
 Не открывайте `zig-out/docs/index.html` через `file://`. Перейдите в каталог `zig-out/docs`, запустите `python -m http.server 8000` и откройте `http://localhost:8000/`.
 
-## Лицензия
-
-Лицензия проекта пока не указана. Перед публикацией репозитория добавь файл `LICENSE` и укажи выбранную лицензию здесь.
