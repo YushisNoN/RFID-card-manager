@@ -105,19 +105,6 @@ fn handleConnection(
         .{ request, content_len },
     );
 
-    // Если запрашивают корень или файлы статики
-    if (std.mem.startsWith(u8, request, "GET / ")) {
-        // Читаем public/index.html с диска
-        const file_content = std.fs.cwd().readFileAlloc(allocator, "public/index.html", 1024 * 1024) catch {
-            try sendResponse(&writer.interface, 404, "{\"error\":\"Index not found\"}");
-            return;
-        };
-        defer allocator.free(file_content);
-
-        try sendCustomResponse(&writer.interface, 200, "text/html; charset=utf-8", file_content);
-        return;
-    }
-
     // Раздача статики из ./public
     if (std.mem.startsWith(u8, request, "GET ") and !std.mem.startsWith(u8, request, "GET /api/")) {
         // Извлекаем путь между "GET " и " HTTP/1.1"
@@ -140,7 +127,12 @@ fn handleConnection(
             try std.fmt.allocPrint(allocator, "public{s}", .{path});
         defer if (!std.mem.eql(u8, path, "/")) allocator.free(file_path);
 
-        const content = std.fs.cwd().readFileAlloc(allocator, file_path, 5 * 1024 * 1024) catch {
+        const content = std.Io.Dir.cwd().readFileAlloc(
+            io,
+            file_path,
+            allocator,
+            .limited(5 * 1024 * 1024),
+        ) catch {
             try sendResponse(&writer.interface, 404, "{\"error\":\"File not found\"}");
             return;
         };
@@ -351,9 +343,6 @@ fn sendResponse(
         "HTTP/1.1 {d} {s}\r\n" ++
             "Content-Type: application/json; charset=utf-8\r\n" ++
             "Content-Length: {d}\r\n" ++
-            "Access-Control-Allow-Origin: *\r\n" ++
-            "Access-Control-Allow-Methods: POST, OPTIONS\r\n" ++
-            "Access-Control-Allow-Headers: Content-Type\r\n" ++
             "Connection: close\r\n" ++
             "\r\n" ++
             "{s}",
