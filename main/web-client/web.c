@@ -1,8 +1,23 @@
+/**
+ * @file web.c
+ * @brief Реализация Wi-Fi-подключения, веб-настройки и HTTP-клиента.
+ *
+ * @details
+ * Модуль реализует три основные задачи:
+ * - запуск Wi-Fi ESP32 в режиме AP + STA;
+ * - предоставление HTTP-страницы для ввода SSID и пароля сети;
+ * - сохранение параметров сети в NVS и автоматическое подключение
+ *   к сохранённой сети после перезагрузки;
+ * - отправку UID RFID-карты на сервер посредством HTTP POST.
+ *
+ * Параметры внешней Wi-Fi сети хранятся в разделе NVS с пространством
+ * имён "wifi_cfg" и ключами "ssid" и "password".
+ */
+
 #include "web.h"
 
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "esp_log.h"
@@ -14,15 +29,49 @@
 #include "esp_system.h"
 #include "nvs.h"
 
-#include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 
-char* WIFI_SSID  = "korobochka";
-char* WIFI_PASSWORD = "simsim_open";
-char* SERVER_URL = "http://91.92.43.183/api/checkUID";
+/*
+ * Неиспользуемые в текущей реализации глобальные переменные WIFI_SSID
+ * и WIFI_PASSWORD удалены: параметры внешней сети загружаются из NVS.
+ * Это также предотвращает случайную публикацию пароля Wi-Fi в репозитории.
+ */
 
+/**
+ * @brief URL endpoint, принимающего UID RFID-карты.
+ *
+ * @note При переносе сервера в другую сеть необходимо изменить адрес.
+ */
+char* SERVER_URL    = "http://91.92.43.183/api/checkUID";
+
+
+/**
+ * @brief Загружает сохранённые параметры Wi-Fi из NVS.
+ * @return true, если SSID успешно прочитан; иначе false.
+ *
+ * @details
+ * Читает строковые значения из пространства имён "wifi_cfg":
+ * - "ssid" — название сети;
+ * - "password" — пароль сети.
+ * Если пароль отсутствует, используется пустая строка.
+ *
+ * @note Функция предполагает, что NVS уже инициализирована в main.c.
+ */
 static bool load_wifi_credentials(void);
+
+/**
+ * @brief Извлекает и декодирует значение поля HTML-формы.
+ * @param[in] body Тело HTTP-запроса в формате application/x-www-form-urlencoded.
+ * @param[in] key Имя искомого поля.
+ * @param[out] output Буфер для декодированного значения.
+ * @param[in] output_size Размер выходного буфера в байтах.
+ * @return true, если поле найдено и успешно декодировано; иначе false.
+ *
+ * @details
+ * Преобразует '+' в пробел и последовательности "%XX" в соответствующие
+ * байты. В конце добавляет нулевой терминатор.
+ */
 static bool get_form_value(
     const char *body,
     const char *key,
@@ -30,74 +79,113 @@ static bool get_form_value(
     size_t output_size
 );
 
+
+/**
+ * @brief HTML-страница настройки Wi-Fi.
+ *
+ * @details
+ * Страница содержит форму, отправляющую SSID и пароль методом POST
+ * на URI "/save". HTML и CSS встроены в прошивку как строковый литерал;
+ * отдельные файлы фронтенда для этой страницы не требуются.
+ */
 static const char setup_page[] =
 "<!DOCTYPE html>"
+
 "<html lang='ru'>"
-"<head>"
-"<meta charset='UTF-8'>"
-"<meta name='viewport' content='width=device-width, initial-scale=1'>"
-"<title>RFID Setup</title>"
-"<style>"
-"*{box-sizing:border-box}"
-"body{margin:0;min-height:100vh;display:flex;align-items:center;"
-"justify-content:center;background:#0b1020;color:#f2f6ff;"
-"font-family:Arial,sans-serif;padding:20px}"
-".panel{width:100%;max-width:420px;background:#151f35;"
-"border:1px solid #263b59;border-radius:20px;padding:28px;"
-"box-shadow:0 15px 50px #0008}"
-".logo{color:#35d6f5;font-size:13px;letter-spacing:3px;"
-"font-weight:bold;margin-bottom:25px}"
-"h1{font-size:25px;margin:0 0 10px}"
-".sub{color:#91a1bb;font-size:14px;line-height:1.5;"
-"margin-bottom:25px}"
-"label{display:block;font-size:13px;color:#b9c9df;margin:18px 0 8px}"
-"input{width:100%;padding:14px;border-radius:10px;"
-"border:1px solid #344966;background:#0e182b;color:white;"
-"font-size:15px;outline:none}"
-"input:focus{border-color:#35d6f5}"
-"button{width:100%;margin-top:25px;padding:15px;"
-"border:0;border-radius:11px;background:#168db5;"
-"color:white;font-weight:bold;font-size:15px;cursor:pointer}"
-"button:active{transform:scale(.98)}"
-".note{font-size:12px;color:#8192aa;margin-top:20px;"
-"text-align:center;line-height:1.5}"
-"</style>"
-"</head>"
-"<body>"
-"<main class='panel'>"
-"<div class='logo'>RFID TERMINAL</div>"
-"<h1>Настройка Wi-Fi</h1>"
-"<p class='sub'>Укажите сеть, к которой необходимо подключить терминал.</p>"
-"<form method='POST' action='/save'>"
-"<label>Название сети (SSID)</label>"
-"<input name='ssid' maxlength='32' required autocomplete='off' "
-"placeholder='Название Wi-Fi'>"
-"<label>Пароль сети</label>"
-"<input name='password' type='password' maxlength='63' "
-"autocomplete='new-password' placeholder='Пароль Wi-Fi'>"
-"<button type='submit'>Сохранить и подключиться</button>"
-"</form>"
-"<div class='note'>Настройки сохраняются в памяти устройства."
-"<br>После сохранения терминал перезапустится.</div>"
-"</main>"
-"</body>"
+    "<head>"
+        "<meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>RFID Setup</title>"
+        "<style>"
+            "*{box-sizing:border-box}"
+            "body{margin:0;min-height:100vh;display:flex;align-items:center;"
+            "justify-content:center;background:#0b1020;color:#f2f6ff;"
+            "font-family:Arial,sans-serif;padding:20px}"
+            ".panel{width:100%;max-width:420px;background:#151f35;"
+            "border:1px solid #263b59;border-radius:20px;padding:28px;"
+            "box-shadow:0 15px 50px #0008}"
+            ".logo{color:#35d6f5;font-size:13px;letter-spacing:3px;"
+            "font-weight:bold;margin-bottom:25px}"
+            "h1{font-size:25px;margin:0 0 10px}"
+            ".sub{color:#91a1bb;font-size:14px;line-height:1.5;"
+            "margin-bottom:25px}"
+            "label{display:block;font-size:13px;color:#b9c9df;margin:18px 0 8px}"
+            "input{width:100%;padding:14px;border-radius:10px;"
+            "border:1px solid #344966;background:#0e182b;color:white;"
+            "font-size:15px;outline:none}"
+            "input:focus{border-color:#35d6f5}"
+            "button{width:100%;margin-top:25px;padding:15px;"
+            "border:0;border-radius:11px;background:#168db5;"
+            "color:white;font-weight:bold;font-size:15px;cursor:pointer}"
+            "button:active{transform:scale(.98)}"
+            ".note{font-size:12px;color:#8192aa;margin-top:20px;"
+            "text-align:center;line-height:1.5}"
+            "</style>"
+    "</head>"
+    "<body>"
+        "<main class='panel'>"
+            "<div class='logo'>RFID TERMINAL</div>"
+                "<h1>Настройка Wi-Fi</h1>"
+                "<p class='sub'>Укажите сеть, к которой необходимо подключить терминал.</p>"
+                "<form method='POST' action='/save'>"
+                    "<label>Название сети (SSID)</label>"
+                    "<input name='ssid' maxlength='32' required autocomplete='off' "
+                    "placeholder='Название Wi-Fi'>"
+                    "<label>Пароль сети</label>"
+                    "<input name='password' type='password' maxlength='63' "
+                    "autocomplete='new-password' placeholder='Пароль Wi-Fi'>"
+                    "<button type='submit'>Сохранить и подключиться</button>"
+                "</form>"
+            "<div class='note'>Настройки сохраняются в памяти устройства."
+            "<br>После сохранения терминал перезапустится.</div>"
+        "</main>"
+    "</body>"
 "</html>";
 
 
-
+/** @brief Тег ESP-IDF для сообщений журнала сетевого модуля. */
 static const char *TAG = "HTTP_CLIENT";
 
+/**
+ * @brief Бит группы событий, означающий, что Wi-Fi STA получила IP-адрес.
+ * @details Бит устанавливается при IP_EVENT_STA_GOT_IP и сбрасывается
+ *          при WIFI_EVENT_STA_DISCONNECTED.
+ */
 #define WIFI_CONNECTED_BIT BIT0
 
+
+/** @brief SSID точки доступа, создаваемой самим терминалом для настройки. */
 #define SETUP_AP_SSID      "RFID-Setup"
+
+/**
+ * @brief Пароль точки доступа настройки.
+ * @warning Это значение является стандартным примером. Перед публикацией
+ *          и эксплуатацией устройства следует задать уникальный пароль.
+ */
 #define SETUP_AP_PASSWORD  "rfidsetup"
+
+/** @brief Признак наличия сохранённых параметров внешней Wi-Fi сети. */
 static bool wifi_has_credentials = false;
+
+/** @brief Группа событий FreeRTOS для синхронизации состояния Wi-Fi. */
 static EventGroupHandle_t wifi_event_group;
+
+/** @brief Буфер SSID, загружаемый из NVS; максимум 32 байта плюс '\0'. */
 static char saved_ssid[33];
+
+/** @brief Буфер пароля, загружаемый из NVS; максимум 63 байта плюс '\0'. */
 static char saved_password[65];
+
+/** @brief Дескриптор встроенного HTTP-сервера страницы настройки. */
 static httpd_handle_t setup_server = NULL;
 
-
+/**
+ * @brief Обработчик GET-запроса к корневому URI "/".
+ * @param[in,out] req Запрос HTTP-сервера ESP-IDF.
+ * @return Результат отправки HTML-страницы клиенту.
+ * @details Отправляет встроенную страницу setup_page с типом содержимого
+ *          text/html и кодировкой UTF-8. Запрещает использование кэша.
+ */
 static esp_err_t root_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -111,6 +199,24 @@ static esp_err_t root_handler(httpd_req_t *req)
     );
 }
 
+/**
+ * @brief Обработчик POST-запроса к URI "/save".
+ * @param[in,out] req HTTP-запрос с полями ssid и password.
+ * @return ESP_OK при успешной отправке ответа; код ошибки при сбое.
+ *
+ * @details
+ * Получает тело HTML-формы, декодирует поля SSID и пароля, проверяет
+ * допустимую длину значений и сохраняет их в NVS в пространстве имён
+ * "wifi_cfg". После успешной отправки страницы-подтверждения перезапускает
+ * ESP32, чтобы устройство подключилось к новой сети.
+ *
+ * @retval ESP_FAIL Ошибка при чтении тела HTTP-запроса.
+ * @retval ESP_OK Ответ успешно отправлен (при успешном сохранении после
+ *         этого запрашивается перезапуск устройства).
+ *
+ * @note Допустимая длина SSID — от 1 до 32 байт. Пароль может быть пустым
+ *       для открытой сети либо содержать от 8 до 63 байт.
+ */
 static esp_err_t save_handler(httpd_req_t *req)
 {
     char body[512] = {0};
@@ -233,6 +339,19 @@ static esp_err_t save_handler(httpd_req_t *req)
     return send_err;
 }
 
+
+/**
+ * @brief Запускает HTTP-сервер веб-настройки Wi-Fi.
+ * @return Функция не возвращает значение.
+ *
+ * @details
+ * Создаёт HTTP-сервер на порту 80 и регистрирует маршруты:
+ * - GET "/" — отображение страницы настройки;
+ * - POST "/save" — сохранение параметров Wi-Fi.
+ *
+ * @note В текущей реализации ошибки запуска и регистрации обработчиков
+ *       приводят к вызову ESP_ERROR_CHECK и остановке приложения.
+ */
 static void start_setup_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -268,7 +387,26 @@ static void start_setup_server(void)
     ESP_LOGI(TAG, "Wi-Fi setup page: http://192.168.4.1");
 }
 
-
+/**
+ * @brief Отправляет UID RFID-карты на сервер для проверки.
+ * @param[in] uid RFID UID: длина и массив байтов.
+ * @return Результат HTTP-операции в формате esp_err_t.
+ *
+ * @details
+ * Проверяет длину UID, ожидает подключения Wi-Fi не более пяти секунд,
+ * формирует JSON вида {"size":N,"bytes":[...]}, а затем выполняет
+ * HTTP POST-запрос на SERVER_URL с заголовком Content-Type: application/json.
+ *
+ * @retval ESP_OK Сервер вернул HTTP 200.
+ * @retval ESP_ERR_INVALID_ARG UID имеет недопустимую длину.
+ * @retval ESP_ERR_TIMEOUT Станция ESP32 не подключена к Wi-Fi.
+ * @retval ESP_ERR_INVALID_SIZE JSON не помещается в буфер.
+ * @retval ESP_FAIL HTTP-клиент не удалось создать или произошёл иной сбой.
+ * @retval Другой код Ошибка HTTP-клиента.
+ *
+ * @note Ответ считается успешным только при HTTP 200. Тело ответа сервером
+ *       не разбирается; например, HTTP 409 также считается отказом.
+ */
 esp_err_t sendRequest(RFIDCard uid) {
     if (uid.size == 0 || uid.size > sizeof(uid.bytes)) {
         ESP_LOGE(TAG, "Invalid UID size: %d", uid.size);
@@ -405,7 +543,19 @@ esp_err_t sendRequest(RFIDCard uid) {
 }
 
 
-
+/**
+ * @brief Обработчик событий Wi-Fi и IP-уровня.
+ * @param[in] arg Пользовательский аргумент обработчика (не используется).
+ * @param[in] event_base База события ESP-IDF: WIFI_EVENT или IP_EVENT.
+ * @param[in] event_id Идентификатор события внутри базы.
+ * @param[in] event_data Данные события; для IP_EVENT_STA_GOT_IP содержит
+ *                       структуру ip_event_got_ip_t.
+ *
+ * @details
+ * При запуске станции инициирует подключение, если параметры сети найдены.
+ * При потере соединения сбрасывает WIFI_CONNECTED_BIT и запускает повторное
+ * подключение. При получении IP-адреса устанавливает WIFI_CONNECTED_BIT.
+ */
 static void wifi_event_handler(
     void *arg,
     esp_event_base_t event_base,
@@ -454,6 +604,22 @@ static void wifi_event_handler(
     }
 }
 
+/**
+ * @brief Инициализирует сетевые интерфейсы и запускает Wi-Fi.
+ *
+ * @details
+ * Создаёт сетевой стек ESP-NETIF и event loop, создаёт интерфейсы AP и STA,
+ * загружает сохранённые параметры из NVS, инициализирует Wi-Fi и регистрирует
+ * обработчики событий. После этого настраивает точку доступа RFID-Setup,
+ * переводит Wi-Fi в режим WIFI_MODE_APSTA, при наличии сохранённых параметров
+ * настраивает STA, запускает Wi-Fi и HTTP-сервер настройки.
+ *
+ * @note Функция не ожидает получения IP-адреса внешней сетью. Состояние
+ *       подключения определяется событием IP_EVENT_STA_GOT_IP.
+ *
+ * @warning Используются ESP_ERROR_CHECK: ошибка критической операции
+ *          приводит к аварийному завершению текущего приложения.
+ */
 void wifi_init_sta(void)
 {
     // Network initialization
@@ -574,6 +740,14 @@ void wifi_init_sta(void)
     ESP_LOGI(TAG, "================================");
 }
 
+
+/**
+ * @brief Загружает сохранённые SSID и пароль из NVS.
+ * @return true, если SSID найден и успешно прочитан; иначе false.
+ * @details Использует пространство имён "wifi_cfg" и ключи "ssid"
+ *          и "password". Если ключ пароля отсутствует, поле пароля
+ *          устанавливается в пустую строку.
+ */
 static bool load_wifi_credentials(void)
 {
     nvs_handle_t handle;
@@ -623,6 +797,14 @@ static bool load_wifi_credentials(void)
     return true;
 }
 
+
+/**
+ * @brief Преобразует шестнадцатеричный символ в числовое значение.
+ * @param[in] c Символ от '0' до '9', 'A' до 'F' или 'a' до 'f'.
+ * @return Значение от 0 до 15 либо -1, если символ не является HEX-цифрой.
+ * @details Вспомогательная функция для декодирования URL-последовательностей
+ *          вида "%XX" в get_form_value().
+ */
 static int hex_value(char c)
 {
     if (c >= '0' && c <= '9') return c - '0';
@@ -632,6 +814,21 @@ static int hex_value(char c)
     return -1;
 }
 
+
+/**
+ * @brief Находит поле HTML-формы и декодирует его значение.
+ * @param[in] body Тело формы с парами параметров, разделёнными '&'.
+ * @param[in] key Имя параметра, например "ssid" или "password".
+ * @param[out] output Буфер для результата.
+ * @param[in] output_size Размер буфера output.
+ * @return true, если искомый параметр найден и декодирован; иначе false.
+ *
+ * @details
+ * Поддерживает кодирование application/x-www-form-urlencoded:
+ * символ '+' преобразуется в пробел, а последовательность "%XX" —
+ * в байт с шестнадцатеричным значением XX. Функция проверяет границы
+ * выходного буфера и добавляет завершающий нулевой байт.
+ */
 static bool get_form_value(
     const char *body,
     const char *key,

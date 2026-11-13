@@ -9,6 +9,25 @@
 #include "gui/gui.h"
 
 static const char *TAG = "MAIN";
+
+/**
+ * @brief Главная точка входа приложения ESP-IDF.
+ *
+ * @details
+ * Выполняет последовательную инициализацию:
+ * - NVS;
+ * - графического интерфейса;
+ * - Wi-Fi;
+ * - RFID-считывателя RC522.
+ *
+ * После успешного завершения функция возвращается,
+ * дальнейшая работа выполняется задачами и обработчиками
+ * событий соответствующих компонентов.
+ *
+ * @note При ошибке инициализации GUI запуск прекращается.
+ *
+ * @return Функция не возвращает значение.
+ */
 void app_main(void)
 {
     esp_err_t ret;
@@ -30,7 +49,7 @@ void app_main(void)
 
     // Initialize GUI
     esp_lcd_panel_handle_t panel = gui_init();
-
+    
     if (panel == NULL) {
         ESP_LOGE(TAG, "GUI initialization failed");
         return;

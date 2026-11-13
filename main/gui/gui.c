@@ -1,3 +1,29 @@
+/**
+ * @file gui.c
+ * @brief Реализация графического интерфейса RFID-терминала.
+ *
+ * @details
+ * Модуль отвечает за инициализацию TFT-дисплея ST7789V, SPI-подключения,
+ * LVGL и отображение пользовательского интерфейса терминала.
+ *
+ * Интерфейс содержит заголовок, анимированную область RFID-индикатора,
+ * информационную карточку со статусом и индикатор времени отображения
+ * результата. Для текстовых элементов используется сгенерированный шрифт
+ * rfid_font_18, который должен содержать необходимые символы кириллицы.
+ *
+ * Поддерживаемые состояния:
+ * - GUI_STATE_WAITING — ожидание карты;
+ * - GUI_STATE_READING — проверка карты;
+ * - GUI_STATE_SUCCESS — успешная обработка;
+ * - GUI_STATE_ERROR — ошибка обработки.
+ *
+ * Публичные функции изменения состояния синхронизируют доступ к LVGL
+ * посредством lvgl_port_lock() и lvgl_port_unlock().
+ *
+ * @note Параметры GPIO, разрешение экрана и частота SPI задаются ниже
+ *       через макросы.
+ */
+
 #include "gui.h"
 
 #include <stdint.h>
@@ -12,95 +38,178 @@
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
 
+/** @brief Объявление сгенерированного LVGL-шрифта с поддержкой кириллицы. */
 LV_FONT_DECLARE(rfid_font_18);
 
+/** @brief Тег ESP-LOG для сообщений графического модуля. */
 static const char *TAG = "GUI";
 
+// --------------------------------------------------
+// Hardware and display configuration
+// --------------------------------------------------
+
+/** @brief SPI-контроллер, используемый для подключения TFT-дисплея. */
 #define LCD_HOST SPI3_HOST
 
+/** @brief GPIO выбора микросхемы дисплея (Chip Select). */
 #define PIN_NUM_CS      15
+/** @brief GPIO выбора режима команды/данные дисплея (Data/Command). */
 #define PIN_NUM_DC      2
+/** @brief GPIO аппаратного сброса дисплея. */
 #define PIN_NUM_RST     4
+/** @brief GPIO линии MOSI интерфейса SPI дисплея. */
 #define PIN_NUM_MOSI    12
+/** @brief GPIO линии SCLK интерфейса SPI дисплея. */
 #define PIN_NUM_SCLK    13
+/** @brief GPIO линии MISO интерфейса SPI дисплея. */
 #define PIN_NUM_MISO    14
 
+/** @brief Горизонтальное разрешение дисплея в пикселях. */
 #define LCD_H_RES       240
+/** @brief Вертикальное разрешение дисплея в пикселях. */
 #define LCD_V_RES       320
 
+/** @brief Частота тактового сигнала SPI дисплея, 20 МГц. */
 #define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
 
-// ---------------- Colors ----------------
+// --------------------------------------------------
+// UI appearance configuration
+// --------------------------------------------------
 
+/** @brief Верхний цвет фонового градиента интерфейса. */
 #define COLOR_BG_TOP   0x0E1530
+/** @brief Нижний цвет фонового градиента интерфейса. */
 #define COLOR_BG_BOT   0x070B16
+/** @brief Основной цвет информационной карточки. */
 #define COLOR_PANEL    0x151F35
+/** @brief Дополнительный цвет элементов интерфейса. */
 #define COLOR_PANEL2   0x243453
+/** @brief Акцентный цвет состояния ожидания. */
 #define COLOR_CYAN     0x35D6F5
+/** @brief Акцентный цвет состояния проверки. */
 #define COLOR_BLUE     0x4C8DFF
+/** @brief Акцентный цвет успешной обработки. */
 #define COLOR_GREEN    0x36E69A
+/** @brief Акцентный цвет ошибки. */
 #define COLOR_RED      0xFF536B
+/** @brief Основной цвет текста. */
 #define COLOR_WHITE    0xF2F6FF
+/** @brief Вторичный цвет текста. */
 #define COLOR_GRAY     0x8493AD
 
+/** @brief Размер квадратной области центральной анимации в пикселях. */
 #define HERO_SIZE      140
+/** @brief Количество дуг бесконтактного RFID-индикатора. */
 #define WAVE_COUNT     3
+/** @brief Период анимации ожидания в миллисекундах. */
 #define WAVE_CYCLE_MS  1500
 
-// ---------------- Objects ----------------
+// --------------------------------------------------
+// LVGL objects and state
+// --------------------------------------------------
 
+/** @brief Внешний анимируемый ореол вокруг RFID-индикатора. */
 static lv_obj_t *halo;
+/** @brief Круговая дуга-индикатор процесса/результата. */
 static lv_obj_t *ring;
+/** @brief Внутренний диск центрального RFID-индикатора. */
 static lv_obj_t *disc;
+/** @brief Центральная точка бесконтактного индикатора. */
 static lv_obj_t *dot;
+/** @brief Три дуги, изображающие бесконтактный сигнал. */
 static lv_obj_t *waves[WAVE_COUNT];
+/** @brief Линия зелёной галочки успешной обработки. */
 static lv_obj_t *check_line;
+/** @brief Первая линия красного крестика ошибки. */
 static lv_obj_t *cross_line1;
+/** @brief Вторая линия красного крестика ошибки. */
 static lv_obj_t *cross_line2;
 
+/** @brief Карточка, содержащая основной статус и поясняющий текст. */
 static lv_obj_t *info_card;
+/** @brief LVGL-метка основного статуса. */
 static lv_obj_t *status_label;
+/** @brief LVGL-метка дополнительной подсказки. */
 static lv_obj_t *hint_label;
+/** @brief Полоса обратного отсчёта для состояний результата. */
 static lv_obj_t *timer_bar;
 
+/** @brief Таймер автоматического возврата к экрану ожидания. */
 static lv_timer_t *return_timer;
 
+/** @brief Текущее состояние графического интерфейса. */
 static GUI_State current_state;
+/** @brief Показывает, было ли уже установлено первое состояние интерфейса. */
 static bool state_valid = false;
 
+/**
+ * @brief Внутренняя функция переключения состояния интерфейса.
+ * @param[in] state Новое состояние из перечисления GUI_State.
+ */
 static void set_state(GUI_State state);
 
-// Points for the drawn icons (must live as long as the lines)
+// --------------------------------------------------
+// Icon geometry
+// --------------------------------------------------
+
+/** @brief Координаты точек, формирующих галочку успешной обработки. */
 static const lv_point_precise_t check_pts[] = {
     {10, 31}, {24, 45}, {50, 17}
 };
+/** @brief Координаты первой диагонали крестика ошибки. */
 static const lv_point_precise_t cross_pts1[] = {
     {14, 14}, {46, 46}
 };
+/** @brief Координаты второй диагонали крестика ошибки. */
 static const lv_point_precise_t cross_pts2[] = {
     {46, 14}, {14, 46}
 };
 
 // --------------------------------------------------
-// Animations
+// Animation callbacks and helpers
 // --------------------------------------------------
 
+/**
+ * @brief Callback изменения прозрачности LVGL-объекта.
+ * @param[in] obj Объект, прозрачность которого требуется изменить.
+ * @param[in] v Новое значение прозрачности.
+ *
+ * @details Используется анимациями ореола и других элементов интерфейса.
+ */
 static void anim_opa_cb(void *obj, int32_t v)
 {
     lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
 }
 
+/**
+ * @brief Callback изменения угла кругового индикатора.
+ * @param[in] obj Объект дуги LVGL.
+ * @param[in] v Новое значение угла поворота.
+ */
 static void anim_rotation_cb(void *obj, int32_t v)
 {
     lv_arc_set_rotation((lv_obj_t *)obj, v);
 }
 
+/**
+ * @brief Callback обновления значения полосы прогресса.
+ * @param[in] obj Объект полосы LVGL.
+ * @param[in] v Новое значение индикатора.
+ */
 static void anim_bar_cb(void *obj, int32_t v)
 {
     lv_bar_set_value((lv_obj_t *)obj, v, LV_ANIM_OFF);
 }
 
-// One animation drives the halo and all waves, so they never desync
+/**
+ * @brief Обновляет ореол и дуги бесконтактного сигнала.
+ * @param[in] obj Параметр callback LVGL; в этой функции не используется.
+ * @param[in] v Текущее значение анимации в диапазоне WAVE_CYCLE_MS.
+ *
+ * @details
+ * Одна анимация управляет прозрачностью ореола и всех трёх дуг. Это
+ * синхронизирует их изменение и создаёт эффект распространяющихся волн.
+ */
 static void anim_waiting_cb(void *obj, int32_t v)
 {
     (void)obj;
@@ -119,6 +228,12 @@ static void anim_waiting_cb(void *obj, int32_t v)
     }
 }
 
+/**
+ * @brief Запускает циклическую анимацию ожидания RFID-карты.
+ *
+ * @details Анимация изменяет прозрачность ореола и трёх дуг бесконтактного
+ *          индикатора с периодом WAVE_CYCLE_MS.
+ */
 static void start_waiting_animation(void)
 {
     lv_anim_t a;
@@ -132,6 +247,14 @@ static void start_waiting_animation(void)
     lv_anim_start(&a);
 }
 
+/**
+ * @brief Запускает циклическую анимацию прозрачности объекта.
+ * @param[in] obj Объект LVGL для анимации.
+ * @param[in] from Начальное значение прозрачности.
+ * @param[in] to Конечное значение прозрачности.
+ * @param[in] duration Продолжительность одного прохода в миллисекундах.
+ * @param[in] delay Задержка перед запуском в миллисекундах.
+ */
 static void start_pulse(lv_obj_t *obj, int32_t from, int32_t to,
                         uint32_t duration, uint32_t delay)
 {
@@ -147,6 +270,12 @@ static void start_pulse(lv_obj_t *obj, int32_t from, int32_t to,
     lv_anim_start(&a);
 }
 
+/**
+ * @brief Запускает бесконечное вращение дуги-индикатора.
+ *
+ * @details Используется в состоянии GUI_STATE_READING для визуализации
+ *          проверки карты.
+ */
 static void start_spinner(void)
 {
     lv_anim_t a;
@@ -160,6 +289,13 @@ static void start_spinner(void)
     lv_anim_start(&a);
 }
 
+/**
+ * @brief Запускает обратный отсчёт на полосе состояния.
+ * @param[in] ms Продолжительность отсчёта в миллисекундах.
+ *
+ * @details Значение полосы плавно уменьшается от 100 до 0 за указанный
+ *          промежуток времени.
+ */
 static void start_countdown(uint32_t ms)
 {
     lv_bar_set_value(timer_bar, 100, LV_ANIM_OFF);
@@ -174,6 +310,13 @@ static void start_countdown(uint32_t ms)
     lv_anim_start(&a);
 }
 
+/**
+ * @brief Останавливает анимации интерфейса и сбрасывает их основные параметры.
+ *
+ * @details Удаляет анимации, связанные с ореолом, дугой, полосой прогресса
+ *          и волнами. После остановки прозрачность волн и ореола, а также
+ *          угол дуги возвращаются к исходным значениям.
+ */
 static void stop_all_animations(void)
 {
     lv_anim_delete(halo, NULL);
@@ -191,9 +334,16 @@ static void stop_all_animations(void)
 }
 
 // --------------------------------------------------
-// UI helpers
+// UI helper functions
 // --------------------------------------------------
 
+/**
+ * @brief Создаёт прозрачный контейнер без прокрутки и рамки.
+ * @param[in] parent Родительский объект LVGL.
+ * @param[in] w Ширина контейнера в пикселях.
+ * @param[in] h Высота контейнера в пикселях.
+ * @return Дескриптор созданного объекта LVGL.
+ */
 static lv_obj_t *make_box(lv_obj_t *parent, int w, int h)
 {
     lv_obj_t *o = lv_obj_create(parent);
@@ -206,6 +356,13 @@ static lv_obj_t *make_box(lv_obj_t *parent, int w, int h)
     return o;
 }
 
+/**
+ * @brief Устанавливает общий акцентный цвет графических элементов.
+ * @param[in] color Цвет в формате 0xRRGGBB.
+ *
+ * @details Обновляет цвет ореола, дуги, центральной точки, волн,
+ *          графических значков, рамки информационной карточки и полосы.
+ */
 static void set_accent_color(uint32_t color)
 {
     lv_color_t c = lv_color_hex(color);
@@ -226,6 +383,11 @@ static void set_accent_color(uint32_t color)
     lv_obj_set_style_bg_color(timer_bar, c, LV_PART_INDICATOR);
 }
 
+/**
+ * @brief Показывает или скрывает элементы бесконтактного индикатора.
+ * @param[in] show true — показать волны и центральную точку;
+ *                 false — скрыть их.
+ */
 static void show_waves(bool show)
 {
     for (int i = 0; i < WAVE_COUNT; i++) {
@@ -236,12 +398,20 @@ static void show_waves(bool show)
     else      lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
 }
 
+/**
+ * @brief Показывает или скрывает графическую галочку.
+ * @param[in] show true — показать галочку; false — скрыть её.
+ */
 static void show_check(bool show)
 {
     if (show) lv_obj_remove_flag(check_line, LV_OBJ_FLAG_HIDDEN);
     else      lv_obj_add_flag(check_line, LV_OBJ_FLAG_HIDDEN);
 }
 
+/**
+ * @brief Показывает или скрывает графический крестик ошибки.
+ * @param[in] show true — показать обе линии крестика; false — скрыть их.
+ */
 static void show_cross(bool show)
 {
     if (show) {
@@ -253,6 +423,13 @@ static void show_cross(bool show)
     }
 }
 
+/**
+ * @brief Обновляет основной статус и дополнительную подсказку.
+ * @param[in] status Текст основного статуса.
+ * @param[in] hint Текст дополнительной подсказки.
+ *
+ * @note Для отображения кириллицы метки используют шрифт rfid_font_18.
+ */
 static void set_text(const char *status, const char *hint)
 {
     lv_label_set_text(status_label, status);
@@ -260,9 +437,16 @@ static void set_text(const char *status, const char *hint)
 }
 
 // --------------------------------------------------
-// State management
+// GUI state management
 // --------------------------------------------------
 
+/**
+ * @brief Callback автоматического возврата интерфейса к ожиданию карты.
+ * @param[in] timer Таймер LVGL, вызвавший callback.
+ *
+ * @details Сбрасывает сохранённый дескриптор таймера и устанавливает
+ *          состояние GUI_STATE_WAITING.
+ */
 static void return_to_waiting(lv_timer_t *timer)
 {
     (void)timer;
@@ -270,6 +454,26 @@ static void return_to_waiting(lv_timer_t *timer)
     set_state(GUI_STATE_WAITING);
 }
 
+/**
+ * @brief Переключает интерфейс в указанное состояние.
+ * @param[in] state Новое состояние GUI_State.
+ *
+ * @details
+ * Перед настройкой нового состояния останавливает предыдущие анимации,
+ * удаляет активный таймер возврата и сбрасывает видимость элементов.
+ *
+ * Поведение по состояниям:
+ * - WAITING: голубой акцент, волны и циклическая анимация ожидания;
+ * - READING: синий акцент, вращающаяся дуга и пульсация ореола;
+ * - SUCCESS: зелёная галочка и возврат к ожиданию через 5000 мс;
+ * - ERROR: красный крестик и возврат к ожиданию через 3000 мс.
+ *
+ * Повторные запросы WAITING и READING не перезапускают уже выполняющуюся
+ * анимацию, если состояние уже установлено.
+ *
+ * @note Функция предназначена для вызова в контексте, где разрешена работа
+ *       с LVGL. Публичные gui_show_*() обеспечивают блокировку LVGL.
+ */
 static void set_state(GUI_State state)
 {
     // Repeated WAITING/READING must not restart the animation
@@ -348,9 +552,21 @@ static void set_state(GUI_State state)
 }
 
 // --------------------------------------------------
-// UI creation
+// UI construction helpers
 // --------------------------------------------------
 
+/**
+ * @brief Создаёт графическую линию LVGL по заданному набору точек.
+ * @param[in] parent Родительский объект линии.
+ * @param[in] pts Массив координат точек линии.
+ * @param[in] count Количество точек в массиве.
+ * @return Дескриптор созданного объекта линии.
+ *
+ * @details Настраивает толщину и скругление линии. Созданная линия
+ *          изначально скрыта и должна быть показана отдельно.
+ *
+ * @warning Массив pts должен оставаться доступным всё время жизни линии.
+ */
 static lv_obj_t *make_line(lv_obj_t *parent, const lv_point_precise_t *pts,
                            uint32_t count)
 {
@@ -363,6 +579,18 @@ static lv_obj_t *make_line(lv_obj_t *parent, const lv_point_precise_t *pts,
     return l;
 }
 
+/**
+ * @brief Создаёт все графические элементы пользовательского интерфейса.
+ *
+ * @details
+ * Создаёт фон с вертикальным градиентом, заголовок, центральную область
+ * RFID-индикатора, анимируемые дуги и ореол, графические значки результата,
+ * информационную карточку, текстовые метки и полосу обратного отсчёта.
+ * В конце устанавливает начальное состояние GUI_STATE_WAITING.
+ *
+ * @note Функция должна вызываться после регистрации дисплея в LVGL и при
+ *       захваченной блокировке lvgl_port.
+ */
 static void create_ui(void)
 {
     lv_obj_t *screen = lv_screen_active();
@@ -507,6 +735,24 @@ static void create_ui(void)
 // Display initialization
 // --------------------------------------------------
 
+/**
+ * @brief Инициализирует SPI, TFT-панель, порт LVGL и пользовательский интерфейс.
+ * @return Дескриптор панели дисплея при успехе; NULL при ошибке.
+ *
+ * @details
+ * Последовательно выполняет следующие действия:
+ * 1. Инициализирует SPI3 и настраивает линии подключения дисплея.
+ * 2. Создаёт SPI-интерфейс esp_lcd.
+ * 3. Создаёт и инициализирует панель ST7789.
+ * 4. Устанавливает ориентацию дисплея и включает его.
+ * 5. Инициализирует esp_lvgl_port.
+ * 6. Регистрирует дисплей в LVGL с разрешением LCD_H_RES x LCD_V_RES.
+ * 7. Захватывает блокировку LVGL и создаёт элементы интерфейса.
+ *
+ * @note Для рендеринга используется буфер размером LCD_H_RES * 40 пикселей.
+ * @warning При любой ошибке инициализации возвращается NULL. Вызывающий
+ *          код должен проверить результат до использования интерфейса.
+ */
 esp_lcd_panel_handle_t gui_init(void)
 {
     esp_err_t ret;
@@ -635,6 +881,12 @@ esp_lcd_panel_handle_t gui_init(void)
 // Public GUI functions
 // --------------------------------------------------
 
+/**
+ * @brief Устанавливает состояние ожидания карты.
+ *
+ * @details Захватывает блокировку LVGL, переводит GUI в GUI_STATE_WAITING
+ *          и освобождает блокировку после обновления интерфейса.
+ */
 void gui_show_waiting(void)
 {
     if (lvgl_port_lock(0)) {
@@ -643,6 +895,12 @@ void gui_show_waiting(void)
     }
 }
 
+/**
+ * @brief Устанавливает состояние проверки карты.
+ *
+ * @details Захватывает блокировку LVGL, переводит GUI в GUI_STATE_READING
+ *          и освобождает блокировку после обновления интерфейса.
+ */
 void gui_show_reading(void)
 {
     if (lvgl_port_lock(0)) {
@@ -651,6 +909,12 @@ void gui_show_reading(void)
     }
 }
 
+/**
+ * @brief Отображает успешную обработку карты.
+ *
+ * @details Захватывает блокировку LVGL, переводит GUI в GUI_STATE_SUCCESS.
+ *          Через пять секунд интерфейс автоматически вернётся к ожиданию.
+ */
 void gui_show_success(void)
 {
     if (lvgl_port_lock(0)) {
@@ -659,6 +923,12 @@ void gui_show_success(void)
     }
 }
 
+/**
+ * @brief Отображает ошибку обработки карты.
+ *
+ * @details Захватывает блокировку LVGL, переводит GUI в GUI_STATE_ERROR.
+ *          Через три секунды интерфейс автоматически вернётся к ожиданию.
+ */
 void gui_show_error(void)
 {
     if (lvgl_port_lock(0)) {
