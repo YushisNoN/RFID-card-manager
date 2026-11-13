@@ -1,0 +1,17 @@
+services:
+  zigserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rfid_server
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "80:8080"
+    networks:
+      - rfid_network
+
+networks:
+  rfid_network:
+    external: true

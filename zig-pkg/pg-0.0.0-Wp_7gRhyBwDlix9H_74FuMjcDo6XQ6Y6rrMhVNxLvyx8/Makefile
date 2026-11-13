@@ -1,0 +1,26 @@
+F=
+
+.PHONY: t
+t:
+	TEST_FILTER="${F}" zig build test -freference-trace
+
+# Refuse to start the container before the certs exist; otherwise docker
+# creates directories at the mount points and the container has to be
+# recreated after running `make ssl`.
+.PHONY: d
+d: tests/server.key
+	cd tests && docker compose up
+
+tests/server.key:
+	$(MAKE) ssl
+
+.PHONY: ssl
+ssl:
+	openssl req -days 3650 -new -text -nodes -subj '/C=SG/ST=SG/L=SG/O=Personal/OU=Personal/CN=localhost' -keyout tests/server.key -out tests/server.csr
+	openssl req -days 3650 -x509 -text -in tests/server.csr -key tests/server.key -out tests/server.crt
+	rm tests/server.csr
+	cp tests/server.crt tests/root.crt
+
+	openssl req -days 3650 -new -nodes -subj '/C=SG/ST=SG/L=SG/O=Personal/OU=Personal/CN=localhost/CN=testclient1' -keyout tests/client.key -out tests/client.csr
+	openssl x509 -days 3650 -req  -CAcreateserial -in tests/client.csr -CA tests/root.crt -CAkey tests/server.key -out tests/client.crt
+	rm tests/client.csr

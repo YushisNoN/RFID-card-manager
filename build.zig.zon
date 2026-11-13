@@ -1,0 +1,19 @@
+.{
+    .name = .ZigServer,
+    .version = "0.1.0",
+    .fingerprint = 0x6cc367defdefa005,
+    .minimum_zig_version = "0.17.1",
+
+    .dependencies = .{
+        .pg = .{
+            .url = "git+https://github.com/karlseguin/pg.zig?ref=master#3ccad62ab37a26cae9fdddc1f6b73be8ee6cd234",
+            .hash = "pg-0.0.0-Wp_7gRhyBwDlix9H_74FuMjcDo6XQ6Y6rrMhVNxLvyx8",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

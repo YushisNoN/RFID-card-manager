@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Платы · учёт</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>учёт плат</h1>
+            <nav class="tabs">
+                <button class="tab active" data-tab="logs">логи</button>
+                <button class="tab" data-tab="stats">статистика</button>
+            </nav>
+        </header>
+
+        <main class="main">
+            <section id="logs-panel" class="panel">
+                <div class="panel-header">
+                    <h2>журнал операций</h2>
+                    <button id="refresh-btn" class="btn-refresh">обновить</button>
+                </div>
+                <div class="table-wrap">
+                    <table class="log-table">
+                        <thead>
+							<tr>
+								<th>#</th>
+								<th>UID карты</th>
+								<th>событие</th>
+								<th>время</th>
+								<th>результат</th>
+							</tr>
+                        </thead>
+                        <tbody id="log-body">
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="stats-panel" class="panel hidden">
+                <div class="panel-header">
+                    <h2>статистика</h2>
+                    <button id="refresh-stats-btn" class="btn-refresh">обновить</button>
+                </div>
+                <div class="stats-grid">
+					<div class="stat-card">
+						<span class="stat-label">всего карт</span>
+						<span class="stat-value" id="stat-takes">0</span>
+					</div>
+
+					<div class="stat-card">
+						<span class="stat-label">выдано карт</span>
+						<span class="stat-value" id="stat-returns">0</span>
+					</div>
+
+					<div class="stat-card">
+						<span class="stat-label">событий сегодня</span>
+						<span class="stat-value" id="stat-avg">0</span>
+					</div>
+				</div>
+                <div class="stats-detail">
+                    <h3>время взятия и отдачи</h3>
+                    <ul id="stat-detail-list" class="stat-list"></ul>
+                </div>
+            </section>
+
+            <aside class="sidebar">
+                <div class="stock-panel">
+                    <h3>в наличии</h3>
+                    <div class="stock-bar-wrap">
+                        <div class="stock-bar">
+                            <div id="stock-fill" class="stock-fill"></div>
+                        </div>
+                        <span id="stock-text" class="stock-text">0/0</span>
+                    </div>
+                </div>
+                <button id="refresh-side-btn" class="btn-refresh side-refresh">обновить</button>
+            </aside>
+        </main>
+
+        <footer class="footer">
+            <button id="refresh-footer-btn" class="btn-refresh">обновить</button>
+        </footer>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
