@@ -247,20 +247,20 @@ fetch('/api/history');
 ### 1. Клонирование репозитория
 
 ```bash
-git clone <REPOSITORY_URL>
+git clone git@github.com:YushisNoN/RFID-card-manager.git
 cd ZigServer
 ```
 
 Чтобы клонировать конкретную ветку:
 
 ```bash
-git clone --branch <BRANCH_NAME> --single-branch <REPOSITORY_URL>
+git clone --branch server --single-branch git@github.com:YushisNoN/RFID-card-manager.git
 cd ZigServer
 ```
 
 ### 2. Настройка подключения к PostgreSQL
 
-Создай базу данных и пользователя PostgreSQL. Затем задай переменную окружения `DATABASE_URL`.
+Предварительно необходимо создать базу данных и пользователя PostgreSQL. Затем задать переменную окружения `DATABASE_URL`.
 
 **PowerShell:**
 
@@ -273,8 +273,6 @@ $env:DATABASE_URL = "postgresql://USER:PASSWORD@localhost:5432/DATABASE_NAME"
 ```bash
 export DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/DATABASE_NAME"
 ```
-
-Подставь реальные имя пользователя, пароль, адрес и имя базы данных.
 
 ### 3. Сборка
 
@@ -328,15 +326,13 @@ docker network create rfid_network
 
 ### 2. Создание `.env`
 
-В корне проекта создай файл `.env`:
+В корне проекта должен лежать файл `.env`:
 
 ```dotenv
 DATABASE_URL=postgresql://USER:PASSWORD@postgres:5432/DATABASE_NAME
 ```
 
 Здесь `postgres` — имя или сетевой alias контейнера PostgreSQL, а не `localhost`.
-
-Не добавляй `.env` с реальными паролями в Git. Для репозитория можно создать `.env.example` с демонстрационными значениями.
 
 ### 3. Сборка и запуск контейнера
 
@@ -392,16 +388,16 @@ zig build docs
 zig-out/docs/
 ```
 
-Чтобы открыть документацию локально, запусти HTTP-сервер из этой директории:
+Чтобы открыть документацию локально, запустите HTTP-сервер из этой директории:
 
 ```bash
 cd zig-out/docs
 python -m http.server 8000
 ```
 
-Затем открой `http://localhost:8000/`.
+Затем откройте `http://localhost:8000/`.
 
-Не открывай `index.html` напрямую через `file://`: браузер может заблокировать загрузку WASM и других ресурсов документации.
+Не открывайте `index.html` напрямую через `file://`: браузер может заблокировать загрузку WASM и других ресурсов документации.
 
 ## Переменные окружения
 
@@ -429,15 +425,15 @@ postgresql://USER:PASSWORD@HOST:5432/DATABASE_NAME
 
 ### Сервер не подключается к PostgreSQL в Docker
 
-Проверь, что контейнер PostgreSQL запущен, подключён к сети `rfid_network`, а его сетевое имя или alias совпадает с хостом в `DATABASE_URL`. При обращении из контейнера Zig значение `localhost` указывает на сам контейнер Zig, а не на контейнер базы данных.
+Проверьте, что контейнер PostgreSQL запущен, подключён к сети `rfid_network`, а его сетевое имя или alias совпадает с хостом в `DATABASE_URL`. При обращении из контейнера Zig значение `localhost` указывает на сам контейнер Zig, а не на контейнер базы данных.
 
 ### Веб-интерфейс не получает данные API
 
-Проверь запросы во вкладке Network браузера. При размещении фронтенда и API на одном сервере используй относительные пути (`/api/stats`, `/api/history`, `/api/checkUID`), а не `http://127.0.0.1:8080`.
+Проверьте запросы во вкладке Network браузера. При размещении фронтенда и API на одном сервере используйте относительные пути (`/api/stats`, `/api/history`, `/api/checkUID`), а не `http://127.0.0.1:8080`.
 
 ### Документация Zig открывается пустой или не загружает WASM
 
-Не открывай `zig-out/docs/index.html` через `file://`. Перейди в каталог `zig-out/docs`, запусти `python -m http.server 8000` и открой `http://localhost:8000/`.
+Не открывайте `zig-out/docs/index.html` через `file://`. Перейдите в каталог `zig-out/docs`, запустите `python -m http.server 8000` и откройте `http://localhost:8000/`.
 
 ## Лицензия
 
